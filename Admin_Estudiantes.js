@@ -209,44 +209,123 @@ function cargarMateriasPorCurso() {
 
 // --- GUARDA INSCRIPCIÓN Y ACTUALIZA CURSO ---
 async function guardarInscripcion() {
-    const btn = document.getElementById('btnGuardarIns');
-    btn.disabled = true; btn.innerText = "Guardando...";
+  const btn = document.getElementById('btnGuardarIns');
+  const dni = document.getElementById('ins_dni_est').value;
+  const nombre = document.getElementById('ins_nombre_est').value;
+  const cursoSeleccionado = document.getElementById('ins_curso_selector').value;
+  
+  // --- VALIDACIONES PREVIAS ---
+  if (!dni || !nombre) {
+    alert("❌ Error: Faltan datos básicos del estudiante");
+    return;
+  }
+  
+  if (!cursoSeleccionado) {
+    alert("❌ Por favor selecciona un curso en 'Paso 1: Definir Curso'");
+    document.getElementById('ins_curso_selector').focus();
+    return;
+  }
+  
+  // Verificar que haya al menos una materia seleccionada
+  let tieneMaterias = false;
+  for (let i = 1; i <= 12; i++) {
+    if (document.getElementById(`materia_${i}`).value) {
+      tieneMaterias = true;
+      break;
+    }
+  }
+  
+  if (!tieneMaterias) {
+    const confirmar = confirm("⚠️ No has seleccionado ninguna materia regular. ¿Deseas continuar solo con el curso?");
+    if (!confirmar) return;
+  }
+  
+  // --- PREPARAR DATOS ---
+  btn.disabled = true; 
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Guardando...';
+  
+  const datos = { 
+    op: 'guardarInscripcion', 
+    dni: dni,
+    nombre: nombre,
+    curso: cursoSeleccionado // ENVIAMOS EL CURSO NUEVO
+  };
+  
+  // Materias regulares (1-12)
+  for (let i = 1; i <= 12; i++) {
+    const selectMateria = document.getElementById(`materia_${i}`);
+    const selectEstado = document.getElementById(`estado_${i}`);
     
-    // Capturamos el curso seleccionado
-    const cursoSeleccionado = document.getElementById('ins_curso_selector').value;
-
-    const datos = { 
-        op: 'guardarInscripcion', 
-        dni: document.getElementById('ins_dni_est').value, 
-        nombre: document.getElementById('ins_nombre_est').value,
-        curso: cursoSeleccionado // <<-- ENVIAMOS EL CURSO NUEVO AL BACKEND
-    };
-
-    for(let i=1; i<=12; i++) {
-        const mat = document.getElementById(`materia_${i}`).value;
-        const est = document.getElementById(`estado_${i}`).value;
-        datos[`m${i}`] = mat ? `${mat} - ${est}` : ""; 
+    const materia = selectMateria ? selectMateria.value : '';
+    const estado = selectEstado ? selectEstado.value : 'Cursa';
+    
+    if (materia) {
+      datos[`m${i}`] = `${materia} - ${estado}`;
+    } else {
+      datos[`m${i}`] = "";
     }
-    for(let j=1; j<=4; j++) {
-        const adeuda = document.getElementById(`int_adeuda_${j}`).value;
-        const en = document.getElementById(`int_en_${j}`).value;
-        datos[`i${j}`] = (adeuda && en) ? `${adeuda} -> ${en}` : "";
+  }
+  
+  // Intensificaciones (1-4)
+  for (let j = 1; j <= 4; j++) {
+    const selectAdeuda = document.getElementById(`int_adeuda_${j}`);
+    const selectEn = document.getElementById(`int_en_${j}`);
+    
+    const adeuda = selectAdeuda ? selectAdeuda.value : '';
+    const en = selectEn ? selectEn.value : '';
+    
+    if (adeuda && en) {
+      // Validar que no sea la misma materia
+      if (adeuda === en) {
+        alert(`⚠️ Advertencia: La intensificación ${j} tiene la misma materia en ambos campos. Se omitirá.`);
+        datos[`i${j}`] = "";
+      } else {
+        datos[`i${j}`] = `${adeuda} -> ${en}`;
+      }
+    } else {
+      datos[`i${j}`] = "";
     }
-
-    try {
-        await fetch(URL_API, { method: 'POST', body: JSON.stringify(datos) });
-        
-        const modalEl = document.getElementById('modalInscripcion');
-        const modal = bootstrap.Modal.getInstance(modalEl);
-        if(modal) modal.hide();
-        
-        alert("Inscripción guardada correctamente.");
-        verEstudiantes(); // Recargar la tabla para ver el curso actualizado
-    } catch (e) { 
-        alert("Error al guardar."); 
-    } finally { 
-        btn.disabled = false; btn.innerText = "Guardar Inscripción"; 
+  }
+  
+  // --- ENVIAR AL SERVIDOR ---
+  try {
+    const respuesta = await fetch(URL_API, { 
+      method: 'POST', 
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(datos) 
+    });
+    
+    const resultado = await respuesta.json();
+    
+    if (resultado.status === 'success') {
+      // Cerrar modal
+      const modalEl = document.getElementById('modalInscripcion');
+      const modal = bootstrap.Modal.getInstance(modalEl);
+      if (modal) modal.hide();
+      
+      // Mostrar mensaje de éxito
+      alert(`✅ Inscripción guardada correctamente\nCurso: ${cursoSeleccionado}`);
+      
+      // Recargar la tabla para ver cambios
+      setTimeout(() => {
+        verEstudiantes();
+      }, 500);
+      
+    } else {
+      throw new Error(resultado.message || 'Error desconocido');
     }
+    
+  } catch (error) {
+    console.error('Error al guardar inscripción:', error);
+    alert(`❌ Error al guardar: ${error.message}\n\nVerifica tu conexión e intenta nuevamente.`);
+    
+  } finally { 
+    // Restaurar botón
+    btn.disabled = false; 
+    btn.innerHTML = '💾 Guardar Inscripción';
+  }
 }
 
 // --- CRUD ---
