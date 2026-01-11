@@ -1,0 +1,985 @@
+// ============================================================================
+// ARCHIVO: script.js (FUSIÓN: DIRECTIVOS INTACTO + PRECEPTOR MEJORADO)
+// ============================================================================
+
+// --- TU URL DE GOOGLE APPS SCRIPT ---
+const URL_API = "https://script.google.com/macros/s/AKfycbyTGnoS8hevr6k7pXE16p7KtcQxYrYP0yc11yJoJyvfX8Z7pEKJ5ZYymJ--IBcoVqUB/exec"; 
+
+// --- VARIABLES GLOBALES ---
+let usuarioActual = null;
+let baseDatosAlumnos = []; 
+let baseDatosDocentes = []; 
+let baseDatosMaterias = [];
+
+// ==========================================
+// 1. SISTEMA DE LOGIN Y DASHBOARD
+// ==========================================
+
+async function iniciarSesion() {
+    const email = document.getElementById('email').value;
+    const clave = document.getElementById('clave').value;
+    const btn = document.getElementById('btn-login');
+    const errorMsg = document.getElementById('error-msg');
+    
+    btn.innerText = "Verificando...";
+    btn.disabled = true;
+    errorMsg.classList.add('d-none');
+
+    try {
+        const resp = await fetch(`${URL_API}?op=login&email=${email}&pass=${clave}`);
+        const data = await resp.json();
+
+        if (data.status === 'success') {
+            usuarioActual = data;
+            cargarDashboard(data);
+        } else {
+            errorMsg.innerText = data.message;
+            errorMsg.classList.remove('d-none');
+        }
+    } catch (e) {
+        console.error(e);
+        errorMsg.innerText = "Error de conexión con el servidor.";
+        errorMsg.classList.remove('d-none');
+    } finally {
+        btn.innerText = "Ingresar";
+        btn.disabled = false;
+    }
+}
+
+function cargarDashboard(user) {
+    document.getElementById('login-screen').classList.add('d-none');
+    document.getElementById('dashboard-screen').classList.remove('d-none');
+    document.getElementById('user-name').innerText = `${user.nombre} (${user.rol})`;
+
+    const menu = document.getElementById('menu-lateral');
+    menu.innerHTML = '';
+    const rol = String(user.rol).trim().toLowerCase(); 
+
+    // --- MENÚ DIRECTIVO ---
+    if (rol === 'directivo') {
+        menu.innerHTML += `
+            <button class="list-group-item list-group-item-action" onclick="verEstudiantes()">👥 Gestión Estudiantes</button>
+            <button class="list-group-item list-group-item-action" onclick="verDocentes()">🎓 Gestión Docentes</button>
+        `;
+    }
+
+    // --- MENÚ PRECEPTOR ---
+    if (rol === 'preceptor') {
+        menu.innerHTML += `
+            <button class="list-group-item list-group-item-action" onclick="iniciarModuloPreceptor()">📝 Tomar Asistencia</button>
+            <button class="list-group-item list-group-item-action bg-info text-white" onclick="verContactosDocentes()">📞 Contactar Docentes</button>
+        `;
+        // Iniciar en asistencia por defecto
+        iniciarModuloPreceptor(); 
+    }
+
+    // --- BOTÓN SALIR ---
+    menu.innerHTML += `<button class="list-group-item list-group-item-action text-danger mt-3" onclick="location.reload()">Cerrar Sesión</button>`;
+}
+
+// ==========================================
+// 2. MÓDULO DIRECTIVO: ESTUDIANTES (CÓDIGO ORIGINAL INTACTO)
+// ==========================================
+
+async function verEstudiantes() {
+    document.getElementById('contenido-dinamico').innerHTML = '<div class="spinner-border text-primary"></div> Cargando Estudiantes...';
+    
+    try {
+        const resp = await fetch(`${URL_API}?op=getEstudiantes&rol=Directivo`);
+        const json = await resp.json();
+        baseDatosAlumnos = json.data;
+
+        let html = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5>Gestión de Estudiantes</h5>
+                <button onclick="abrirModalEstudiante()" class="btn btn-success">+ Nuevo Estudiante</button>
+            </div>
+            <div class="table-responsive bg-white rounded shadow-sm" style="max-height: 600px; overflow-y: auto;">
+                <table class="table table-hover table-bordered mb-0 align-middle">
+                    <thead class="table-dark text-center" style="position: sticky; top: 0;">
+                        <tr>
+                            <th>DNI</th>
+                            <th>Nombre</th>
+                            <th>Edad</th>
+                            <th>Curso</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        
+        json.data.forEach((fila, index) => {
+            const edad = calcularEdad(fila[6]);
+            html += `
+                <tr>
+                    <td>${fila[0]}</td>
+                    <td>${fila[1]}</td>
+                    <td class="text-center fw-bold text-primary">${edad}</td>
+                    <td class="text-center"><span class="badge bg-secondary">${fila[2]}</span></td>
+                    <td class="text-center" style="width: 180px;">
+                        <button class="btn btn-sm btn-outline-success me-1" onclick="abrirModalInscripcion(${index})" title="Inscribir Materias">📋</button>
+                        <button class="btn btn-sm btn-outline-primary me-1" onclick="editarEstudiante(${index})" title="Editar">✏️</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="borrarEstudiante('${fila[0]}', '${fila[3]}')" title="Borrar">🗑️</button>
+                    </td>
+                </tr>`;
+        });
+        html += `</tbody></table></div>`;
+        
+        html += renderModalHTML(); 
+        html += renderModalInscripcionHTML();
+        
+        document.getElementById('contenido-dinamico').innerHTML = html;
+    } catch (e) {
+        console.error(e);
+        alert("Error al cargar la lista de estudiantes.");
+    }
+}
+
+// --- LÓGICA DE INSCRIPCIÓN ---
+
+async function abrirModalInscripcion(index) {
+    const est = baseDatosAlumnos[index]; 
+    const dni = est[0];
+    const nombre = est[1];
+    
+    document.getElementById('ins_dni_est').value = dni;
+    document.getElementById('ins_nombre_est').value = nombre;
+    document.getElementById('tituloInscripcion').innerText = `Inscripción: ${nombre}`;
+
+    const modal = new bootstrap.Modal(document.getElementById('modalInscripcion'));
+    modal.show();
+    
+    const container = document.getElementById('gridMaterias');
+    container.innerHTML = '<div class="text-center p-4"><div class="spinner-border text-success"></div><br>Cargando materias y datos previos...</div>';
+
+    try {
+        const respMat = await fetch(`${URL_API}?op=getMaterias&rol=Directivo`);
+        const jsonMat = await respMat.json();
+        
+        let opciones = `<option value="">-- Seleccionar --</option>`;
+        jsonMat.data.forEach(m => {
+            // Tu estructura: ID_Materia, Nombre, DNI_Docente, Curso, Nombre_Docente
+            opciones += `<option value="${m[1]} (${m[3]})">${m[1]} (${m[3]})</option>`;
+        });
+
+        // FORMULARIO: 12 Regulares + 4 Intensificaciones
+        let htmlForm = `<h6 class="bg-light p-2 border border-start-0 border-end-0">Materias Regulares (Ciclo Lectivo)</h6>
+                        <div class="row g-2 mb-3">`;
+        
+        for(let i=1; i<=12; i++) {
+            htmlForm += `
+                <div class="col-md-6 d-flex align-items-center mb-1">
+                    <span class="me-2 fw-bold text-muted small" style="width:20px">${i}.</span>
+                    <select id="materia_${i}" class="form-select form-select-sm me-1">${opciones}</select>
+                    <select id="estado_${i}" class="form-select form-select-sm" style="width:100px">
+                        <option value="Cursa">Cursa</option>
+                        <option value="Recursa">Recursa</option>
+                    </select>
+                </div>`;
+        }
+        htmlForm += `</div>
+                     <h6 class="bg-warning bg-opacity-25 p-2 border border-start-0 border-end-0">Intensificaciones (Previas/Pendientes)</h6>
+                     <div class="alert alert-warning py-1 px-2 small mb-2"><small>Selecciona: <b>Materia Adeudada</b> -> <b>En cuál intensifica</b></small></div>
+                     <div class="row g-2">`;
+        
+        for(let j=1; j<=4; j++) {
+            htmlForm += `
+                <div class="col-12 d-flex align-items-center mb-1">
+                    <span class="me-2 fw-bold text-muted small" style="width:20px">${j}.</span>
+                    <select id="int_adeuda_${j}" class="form-select form-select-sm me-1" title="Materia que intensifica (Adeudada)">${opciones}</select>
+                    <span class="small fw-bold text-muted mx-1">en</span>
+                    <select id="int_en_${j}" class="form-select form-select-sm" title="Materia donde intensifica">${opciones}</select>
+                </div>`;
+        }
+        htmlForm += `</div>`;
+        container.innerHTML = htmlForm;
+
+        // Cargar datos previos
+        const respIns = await fetch(`${URL_API}?op=getInscripcion&rol=Directivo&dni=${dni}`);
+        const jsonIns = await respIns.json();
+
+        if(jsonIns.status === 'success') {
+            const data = jsonIns.data; 
+            for(let i=1; i<=12; i++) {
+                const valor = data[i+1];
+                if(valor && valor.includes(' - ')) {
+                    const partes = valor.split(' - ');
+                    document.getElementById(`materia_${i}`).value = partes[0];
+                    document.getElementById(`estado_${i}`).value = partes[1];
+                }
+            }
+            for(let j=1; j<=4; j++) {
+                const valor = data[13+j];
+                if(valor && valor.includes(' -> ')) {
+                    const partes = valor.split(' -> ');
+                    document.getElementById(`int_adeuda_${j}`).value = partes[0];
+                    document.getElementById(`int_en_${j}`).value = partes[1];
+                }
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<div class="alert alert-danger">Error cargando formulario.</div>';
+    }
+}
+
+async function guardarInscripcion() {
+    const btn = document.getElementById('btnGuardarIns');
+    btn.disabled = true; btn.innerText = "Guardando...";
+
+    const datos = {
+        op: 'guardarInscripcion',
+        dni: document.getElementById('ins_dni_est').value,
+        nombre: document.getElementById('ins_nombre_est').value
+    };
+
+    for(let i=1; i<=12; i++) {
+        const mat = document.getElementById(`materia_${i}`).value;
+        const est = document.getElementById(`estado_${i}`).value;
+        datos[`m${i}`] = mat ? `${mat} - ${est}` : ""; 
+    }
+    for(let j=1; j<=4; j++) {
+        const adeuda = document.getElementById(`int_adeuda_${j}`).value;
+        const en = document.getElementById(`int_en_${j}`).value;
+        if(adeuda && en) datos[`i${j}`] = `${adeuda} -> ${en}`; else datos[`i${j}`] = "";
+    }
+
+    try {
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify(datos) });
+        bootstrap.Modal.getInstance(document.getElementById('modalInscripcion')).hide();
+        alert("¡Inscripción guardada correctamente en la hoja 'Listado'!");
+    } catch (e) {
+        alert("Error al guardar.");
+    } finally {
+        btn.disabled = false; btn.innerText = "Guardar Cambios";
+    }
+}
+
+// --- CRUD DE ESTUDIANTES ---
+
+function abrirModalEstudiante() {
+    document.getElementById('modalTitle').innerText = "Nuevo Estudiante";
+    document.getElementById('formEstudiante').reset();
+    document.getElementById('accion_form').value = "crear";
+    document.getElementById('inp_dni').disabled = false;
+    document.getElementById('inp_email').disabled = false; 
+    new bootstrap.Modal(document.getElementById('modalEstudiante')).show();
+}
+
+function editarEstudiante(index) {
+    const est = baseDatosAlumnos[index];
+    document.getElementById('modalTitle').innerText = "Editar Estudiante";
+    document.getElementById('accion_form').value = "editar";
+    document.getElementById('dni_original').value = est[0];
+    document.getElementById('email_original').value = est[3];
+
+    document.getElementById('inp_dni').value = est[0];
+    document.getElementById('inp_nombre').value = est[1];
+    document.getElementById('inp_curso').value = est[2];
+    document.getElementById('inp_email').value = est[3];
+    document.getElementById('inp_adulto').value = est[4];
+    document.getElementById('inp_tel').value = est[5];
+    if(est[6]) document.getElementById('inp_nacimiento').value = new Date(est[6]).toISOString().split('T')[0];
+    
+    new bootstrap.Modal(document.getElementById('modalEstudiante')).show();
+}
+
+async function guardarEstudiante() {
+    const btn = document.getElementById('btnGuardarModal');
+    btn.disabled = true; btn.innerText = "Guardando...";
+    const datos = {
+        op: 'administrarEstudiante',
+        accion: document.getElementById('accion_form').value,
+        dni: document.getElementById('inp_dni').value,
+        nombre: document.getElementById('inp_nombre').value,
+        curso: document.getElementById('inp_curso').value,
+        email: document.getElementById('inp_email').value,
+        adulto: document.getElementById('inp_adulto').value,
+        telefono: document.getElementById('inp_tel').value,
+        nacimiento: document.getElementById('inp_nacimiento').value,
+        dniOriginal: document.getElementById('dni_original').value,
+        emailOriginal: document.getElementById('email_original').value
+    };
+    try {
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify(datos) });
+        bootstrap.Modal.getInstance(document.getElementById('modalEstudiante')).hide();
+        alert("Operación exitosa.");
+        verEstudiantes(); 
+    } catch (e) { alert("Error al guardar."); }
+}
+
+async function borrarEstudiante(dni, email) {
+    if(!confirm(`¿Seguro que deseas eliminar al alumno con DNI ${dni}?`)) return;
+    try { 
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify({ op: 'administrarEstudiante', accion: 'borrar', dni: dni, email: email }) });
+        alert("Eliminado."); 
+        verEstudiantes(); 
+    } catch (e) { alert("Error al eliminar."); }
+}
+
+// ==========================================
+// 3. MÓDULO DIRECTIVO: DOCENTES CON NUEVA ASIGNACIÓN
+// ==========================================
+
+async function verDocentes() {
+    document.getElementById('contenido-dinamico').innerHTML = '<div class="spinner-border text-primary"></div> Cargando Docentes...';
+    try {
+        const resp = await fetch(`${URL_API}?op=getDocentes&rol=Directivo`);
+        const json = await resp.json();
+        baseDatosDocentes = json.data;
+
+        let html = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5>Gestión de Docentes</h5>
+                <button onclick="abrirModalDocente()" class="btn btn-success">+ Nuevo Docente</button>
+            </div>
+            <div class="table-responsive bg-white rounded shadow-sm" style="max-height: 600px; overflow-y: auto;">
+                <table class="table table-hover table-bordered mb-0 align-middle">
+                    <thead class="table-dark text-center" style="position: sticky; top: 0;">
+                        <tr>
+                            <th>DNI</th>
+                            <th>Nombre</th>
+                            <th>Contacto</th>
+                            <th>Materias Asignadas</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        
+        json.data.forEach((fila, index) => {
+            // fila[0]=DNI, fila[1]=Nombre, fila[2]=Email_ABC, fila[3]=Celular, fila[4]=Materias
+            let materiasHTML = fila[4] || '';
+            if(materiasHTML.includes('[SUPLANTADO]')) {
+                materiasHTML = materiasHTML.replace(/\[SUPLANTADO\]/g, 
+                    '<span class="badge bg-danger me-1">[SUPLANTADO]</span>');
+            }
+            if(materiasHTML.includes('[Suplencia]')) {
+                materiasHTML = materiasHTML.replace(/\[Suplencia\].*?\(Suplente de: (.*?)\)/g, 
+                    '<span class="badge bg-warning text-dark me-1" title="Suplente de: $1">[Suplente]</span>');
+            }
+            
+            html += `
+                <tr>
+                    <td>${fila[0]}</td>
+                    <td class="fw-bold">${fila[1]}</td>
+                    <td><small>${fila[2] || ''}<br>${fila[3] || ''}</small></td>
+                    <td><small>${materiasHTML}</small></td>
+                    <td class="text-center" style="width: 160px;">
+                        <button class="btn btn-sm btn-outline-warning me-1" onclick="abrirModalAsignacion(${index})" title="Asignar Materia">📚</button>
+                        <button class="btn btn-sm btn-outline-primary me-1" onclick="editarDocente(${index})" title="Editar">✏️</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="borrarDocente('${fila[0]}', '${fila[2]}')" title="Borrar">🗑️</button>
+                    </td>
+                </tr>`;
+        });
+        html += `</tbody></table></div>`;
+        html += renderModalDocenteHTML(); 
+        html += renderModalAsignacionCompletaHTML();
+        document.getElementById('contenido-dinamico').innerHTML = html;
+    } catch (e) { 
+        console.error(e);
+        alert("Error cargando docentes."); 
+    }
+}
+
+// --- NUEVA FUNCIÓN DE ASIGNACIÓN CON TIPOS ---
+
+async function abrirModalAsignacion(index) {
+    const doc = baseDatosDocentes[index];
+    document.getElementById('asig_dni_docente').value = doc[0];
+    document.getElementById('asig_nombre_docente').value = doc[1];
+    document.getElementById('span_nombre_docente').innerText = doc[1];
+
+    const select = document.getElementById('sel_materia_asig');
+    const tipoSelect = document.getElementById('tipo_asignacion');
+    
+    select.innerHTML = '<option>Cargando materias...</option>';
+    tipoSelect.innerHTML = `
+        <option value="Titular" selected>Titular</option>
+        <option value="Provisional">Provisional</option>
+        <option value="Interino">Interino</option>
+        <option value="Suplencia">Suplencia</option>
+    `;
+    
+    // Ocultar/mostrar información de suplente
+    tipoSelect.onchange = function() {
+        const suplenteInfoDiv = document.getElementById('suplente_info');
+        if(this.value === 'Suplencia') {
+            suplenteInfoDiv.classList.remove('d-none');
+        } else {
+            suplenteInfoDiv.classList.add('d-none');
+        }
+    };
+
+    new bootstrap.Modal(document.getElementById('modalAsignacionCompleta')).show();
+
+    try {
+        const resp = await fetch(`${URL_API}?op=getMaterias&rol=Directivo`);
+        const json = await resp.json();
+        baseDatosMaterias = json.data;
+        
+        let opts = `<option value="" selected disabled>Selecciona la materia...</option>`;
+        
+        json.data.forEach(mat => {
+            // mat[0]=ID_Materia, mat[1]=Nombre, mat[2]=DNI_Docente, mat[3]=Curso, mat[4]=Nombre_Docente
+            const nombreProfe = mat[4] ? mat[4].toString().trim() : "";
+            
+            let estilo = "color: #333;";
+            let texto = `${mat[1]} (${mat[3]})`;
+            
+            if(nombreProfe) {
+                texto += ` - ${nombreProfe}`;
+                // Verificar si hay información de tipo de asignación (columna 5 o 6 si existen)
+                if(mat[5] && mat[5] === 'Suplencia' && mat[6]) {
+                    estilo = "color: orange; font-weight: bold;";
+                    texto += ` [Suplente de: ${mat[6]}]`;
+                } else if(mat[5]) {
+                    texto += ` [${mat[5]}]`;
+                }
+            } else {
+                estilo = "color: red; font-weight: bold;";
+                texto = `[VACANTE] ${mat[1]} (${mat[3]})`;
+            }
+            
+            opts += `<option value="${mat[0]}" style="${estilo}">${texto}</option>`;
+        });
+        select.innerHTML = opts;
+    } catch (e) { 
+        console.error(e);
+        select.innerHTML = '<option>Error al cargar materias</option>'; 
+    }
+}
+
+async function guardarAsignacionCompleta() {
+    const btn = document.getElementById('btnGuardarAsigCompleta');
+    btn.disabled = true; btn.innerText = "Asignando...";
+
+    const datos = {
+        op: 'asignarDocenteMateria',
+        id_materia: document.getElementById('sel_materia_asig').value,
+        dni_docente: document.getElementById('asig_dni_docente').value,
+        nombre_docente: document.getElementById('asig_nombre_docente').value,
+        tipoAsignacion: document.getElementById('tipo_asignacion').value
+    };
+
+    if(!datos.id_materia) { 
+        alert("Selecciona una materia."); 
+        btn.disabled = false; 
+        btn.innerText = "Confirmar";
+        return; 
+    }
+
+    try {
+        const response = await fetch(URL_API, { 
+            method: 'POST', 
+            body: JSON.stringify(datos) 
+        });
+        const result = await response.json();
+        
+        if(result.status === 'success') {
+            bootstrap.Modal.getInstance(document.getElementById('modalAsignacionCompleta')).hide();
+            alert(`✅ Materia asignada correctamente como ${datos.tipoAsignacion}.`);
+            verDocentes(); // Refrescar la vista
+        } else {
+            throw new Error(result.message || 'Error en la asignación');
+        }
+    } catch (e) { 
+        alert("Error al asignar: " + e.message); 
+    } 
+    finally { 
+        btn.disabled = false; 
+        btn.innerText = "Confirmar"; 
+    }
+}
+
+// --- CRUD DOCENTE STANDARD ---
+
+function abrirModalDocente() {
+    document.getElementById('modalTitleDoc').innerText = "Nuevo Docente";
+    document.getElementById('formDocente').reset();
+    document.getElementById('accion_doc').value = "crear";
+    new bootstrap.Modal(document.getElementById('modalDocente')).show();
+}
+
+function editarDocente(index) {
+    const doc = baseDatosDocentes[index];
+    document.getElementById('modalTitleDoc').innerText = "Editar Docente";
+    document.getElementById('accion_doc').value = "editar";
+    document.getElementById('doc_dni_orig').value = doc[0];
+    document.getElementById('doc_email_orig').value = doc[2];
+    document.getElementById('doc_dni').value = doc[0];
+    document.getElementById('doc_nombre').value = doc[1];
+    document.getElementById('doc_email').value = doc[2];
+    document.getElementById('doc_cel').value = doc[3];
+    new bootstrap.Modal(document.getElementById('modalDocente')).show();
+}
+
+async function guardarDocente() {
+    const datos = {
+        op: 'administrarDocente',
+        accion: document.getElementById('accion_doc').value,
+        dni: document.getElementById('doc_dni').value,
+        nombre: document.getElementById('doc_nombre').value,
+        email: document.getElementById('doc_email').value,
+        celular: document.getElementById('doc_cel').value,
+        dniOriginal: document.getElementById('doc_dni_orig').value,
+        emailOriginal: document.getElementById('doc_email_orig').value
+    };
+    try { 
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify(datos) });
+        bootstrap.Modal.getInstance(document.getElementById('modalDocente')).hide();
+        verDocentes(); 
+    } catch (e) { alert("Error al guardar."); }
+}
+
+async function borrarDocente(dni, email) {
+    if(!confirm(`¿Eliminar docente ${dni}? Esta acción también eliminará sus asignaciones.`)) return;
+    try { 
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify({ op: 'administrarDocente', accion: 'borrar', dni: dni, email: email }) });
+        verDocentes(); 
+    } catch (e) { alert("Error."); }
+}
+
+// ==========================================
+// 4. MÓDULO PRECEPTOR MEJORADO (SIN CAMBIOS)
+// ==========================================
+
+async function iniciarModuloPreceptor() {
+    document.getElementById('contenido-dinamico').innerHTML = `<div class="spinner-border spinner-border-sm"></div> Cargando datos y estadísticas...`;
+    
+    try {
+        const resp = await fetch(`${URL_API}?op=getDataPreceptor&rol=Preceptor`);
+        const json = await resp.json();
+        baseDatosAlumnos = json.data; 
+        
+        const cursos = [...new Set(baseDatosAlumnos.map(obj => obj.data[2]))].sort();
+        let opts = cursos.map(c => `<option value="${c}">${c}</option>`).join('');
+        
+        // FECHA DE HOY POR DEFECTO
+        const hoy = new Date().toISOString().split('T')[0];
+
+        document.getElementById('contenido-dinamico').innerHTML = `
+            <div class="card p-3 shadow-sm mb-3">
+                <h5>📅 Control de Asistencia</h5>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Seleccionar Curso</label>
+                        <select id="selCurso" class="form-select form-select-lg" onchange="renderTablaPreceptor()">
+                            <option selected disabled>Elige un Curso</option>${opts}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Fecha de la Falta</label>
+                        <input type="date" id="fechaAsistencia" class="form-control form-select-lg" value="${hoy}">
+                    </div>
+                </div>
+            </div>
+            <div id="zonaPreceptor"></div>
+            ${renderModalJustificacionHTML()}
+            `;
+    } catch(e) {
+        console.log(e);
+        document.getElementById('contenido-dinamico').innerHTML = `<div class="alert alert-danger">Error de conexión.</div>`;
+    }
+}
+
+function renderTablaPreceptor() {
+    const curso = document.getElementById('selCurso').value;
+    const lista = baseDatosAlumnos
+                    .filter(obj => String(obj.data[2]) === curso)
+                    .sort((a,b) => String(a.data[1]).localeCompare(b.data[1]));
+    
+    if(lista.length === 0) {
+        document.getElementById('zonaPreceptor').innerHTML = '<div class="alert alert-warning">No hay alumnos en este curso.</div>';
+        return;
+    }
+
+    let html = `<div class="card shadow-sm"><table class="table align-middle table-striped mb-0 text-center">
+                <thead class="table-dark">
+                    <tr>
+                        <th class="text-start">Estudiante</th>
+                        <th title="Faltas Acumuladas">F</th>
+                        <th style="background:#d4edda; color:green;">P</th>
+                        <th style="background:#f8d7da; color:red;">A</th>
+                        <th style="background:#fff3cd; color:#856404;">T</th>
+                        <th style="background:#e2e3e5; color:#383d41;">EF</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+    
+    lista.forEach(item => {
+        const alu = item.data; 
+        const st = item.stats; 
+        
+        let totalDisplay = parseFloat(st.total);
+        // Si es decimal (ej 1.25), lo mostramos con decimales. Si es entero (1.00), sin decimales.
+        let totalStr = Number.isInteger(totalDisplay) ? totalDisplay : totalDisplay.toFixed(2).replace('.00','');
+
+        // Alerta de faltas > 10
+        let alerta = "";
+        if(st.total >= 10) {
+            alerta = `<span class="badge bg-danger ms-2">⚠️ ${totalStr}</span>`;
+        } else if(st.total > 0) {
+            alerta = `<span class="badge bg-light text-dark border ms-2">${totalStr}</span>`;
+        }
+
+        html += `
+            <tr>
+                <td class="text-start fw-bold">
+                    ${alu[1]} ${alerta}
+                </td>
+                <td><small>${totalStr}</small></td>
+                
+                <td style="background:#d4edda;">
+                    <input type="radio" name="e_${alu[0]}" value="P" checked style="transform: scale(1.3); cursor: pointer;">
+                </td>
+                
+                <td style="background:#f8d7da;">
+                    <input type="radio" name="e_${alu[0]}" value="A" style="transform: scale(1.3); cursor: pointer;">
+                </td>
+                
+                <td style="background:#fff3cd;">
+                    <input type="radio" name="e_${alu[0]}" value="T" title="Tarde (0.25)" style="transform: scale(1.3); cursor: pointer;">
+                </td>
+
+                <td style="background:#e2e3e5;">
+                    <input type="radio" name="e_${alu[0]}" value="EF" title="Educ. Física (0.5)" style="transform: scale(1.3); cursor: pointer;">
+                </td>
+
+                <td>
+                    <button class="btn btn-sm btn-outline-primary" onclick="abrirModalJustificar('${alu[0]}', '${alu[1]}')" title="Ver Historial / Justificar">
+                        ⚖️
+                    </button>
+                </td>
+            </tr>`;
+    });
+    html += `</tbody></table>
+             <div class="p-3 bg-light border-top">
+                <button onclick="guardarAsis()" class="btn btn-success w-100 btn-lg shadow">✅ Guardar Asistencia</button>
+             </div>
+             </div>`;
+    document.getElementById('zonaPreceptor').innerHTML = html;
+}
+
+async function guardarAsis() {
+    const inputs = document.querySelectorAll('input[type="radio"]:checked');
+    const fechaSeleccionada = document.getElementById('fechaAsistencia').value; // Capturamos la fecha
+    
+    if (!fechaSeleccionada) {
+        alert("Por favor selecciona una fecha.");
+        return;
+    }
+
+    let lista = [];
+    inputs.forEach(inp => lista.push({ dni: inp.name.split('_')[1], estado: inp.value }));
+    
+    const btn = document.querySelector('#zonaPreceptor button');
+    btn.innerText = "Guardando..."; btn.disabled = true;
+
+    try {
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify({ 
+            op: 'guardarAsistenciaMasiva', 
+            lista: lista, 
+            preceptor: usuarioActual.nombre,
+            fecha: fechaSeleccionada // Enviamos la fecha al backend
+        })});
+        alert(`¡Asistencia del ${fechaSeleccionada} guardada!`);
+        iniciarModuloPreceptor();
+    } catch(e) {
+        alert("Error al guardar.");
+        btn.innerText = "Reintentar"; btn.disabled = false;
+    }
+}
+
+// --- NUEVA FUNCIÓN: CONTACTAR DOCENTES ---
+
+async function verContactosDocentes() {
+    document.getElementById('contenido-dinamico').innerHTML = '<div class="spinner-border text-info"></div> Cargando Directorio de Docentes...';
+    
+    try {
+        // Reutilizamos el endpoint getDocentes pero con rol Preceptor
+        const resp = await fetch(`${URL_API}?op=getDocentes&rol=Preceptor`);
+        const json = await resp.json();
+        
+        if (json.status !== 'success') {
+            document.getElementById('contenido-dinamico').innerHTML = '<p class="text-danger">No tienes permiso o hubo un error.</p>';
+            return;
+        }
+
+        let html = `
+            <h5 class="mb-3">📞 Directorio de Docentes</h5>
+            <div class="table-responsive bg-white rounded shadow-sm">
+                <table class="table table-hover table-striped mb-0 align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Docente</th>
+                            <th>Email</th>
+                            <th>Contacto Rápido</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+        
+        json.data.forEach(d => {
+            // d[0]=dni, d[1]=nombre, d[2]=email, d[3]=celular
+            let cel = d[3] ? d[3].toString().replace(/[^0-9]/g, '') : ''; // Limpiar numero
+            let btnWsp = '';
+            
+            if(cel.length > 6) {
+                // Asumimos código de país 54 (Argentina) si no lo tiene, o usar tal cual.
+                btnWsp = `<a href="https://wa.me/549${cel}" target="_blank" class="btn btn-success btn-sm text-white fw-bold">📱 WhatsApp</a>`;
+            } else {
+                btnWsp = `<span class="text-muted small">Sin celular</span>`;
+            }
+
+            html += `
+                <tr>
+                    <td class="fw-bold">${d[1]}</td>
+                    <td><a href="mailto:${d[2]}">${d[2]}</a></td>
+                    <td>${btnWsp}</td>
+                </tr>`;
+        });
+        
+        html += `</tbody></table></div>`;
+        document.getElementById('contenido-dinamico').innerHTML = html;
+
+    } catch (e) {
+        document.getElementById('contenido-dinamico').innerHTML = '<p class="text-danger">Error de conexión.</p>';
+    }
+}
+
+// --- FUNCIONES DE JUSTIFICACIÓN (IGUAL QUE ANTES) ---
+
+async function abrirModalJustificar(dni, nombre) {
+    document.getElementById('just_nombre').innerText = nombre;
+    document.getElementById('just_lista').innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> Buscando faltas...</div>';
+    
+    const modalEl = document.getElementById('modalJustificar');
+    let modal = bootstrap.Modal.getInstance(modalEl);
+    if (!modal) { modal = new bootstrap.Modal(modalEl); }
+    modal.show();
+    
+    try {
+        const resp = await fetch(`${URL_API}?op=getHistorialAlumno&rol=Preceptor&dni=${dni}`);
+        const json = await resp.json();
+        
+        const contenedor = document.getElementById('just_lista');
+        contenedor.innerHTML = "";
+
+        if(json.data.length === 0) {
+            contenedor.innerHTML = '<div class="alert alert-success">No tiene inasistencias injustificadas recientes.</div>';
+            return;
+        }
+
+        let html = `<ul class="list-group">`;
+        json.data.forEach(item => {
+            let badge = '';
+            if(item.estado === 'A') badge = '<span class="badge bg-danger">Ausente</span>';
+            else if(item.estado === 'T') badge = '<span class="badge bg-warning text-dark">Tarde</span>';
+            else if(item.estado === 'EF') badge = '<span class="badge bg-secondary">Ed. Física</span>';
+
+            html += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>${item.fecha}</strong> ${badge}
+                    </div>
+                    <button class="btn btn-sm btn-outline-success" onclick="confirmarJustificacion(${item.fila}, '${dni}')">
+                        Justificar ✅
+                    </button>
+                </li>`;
+        });
+        html += `</ul>`;
+        contenedor.innerHTML = html;
+
+    } catch(e) {
+        document.getElementById('just_lista').innerHTML = "Error al cargar historial.";
+    }
+}
+
+async function confirmarJustificacion(fila, dni) {
+    if(!confirm("¿Confirmas que esta falta está justificada?")) return;
+    const contenedor = document.getElementById('just_lista');
+    contenedor.innerHTML = '<div class="text-center py-3"><div class="spinner-border text-primary"></div><br>Guardando cambios...</div>';
+    try {
+        await fetch(URL_API, { method: 'POST', body: JSON.stringify({ op: 'justificarFalta', fila: fila })});
+        const modalEl = document.getElementById('modalJustificar');
+        const modal = bootstrap.Modal.getInstance(modalEl); 
+        if(modal) { modal.hide(); }
+        alert("¡Justificación guardada correctamente!");
+        iniciarModuloPreceptor();
+    } catch(e) {
+        alert("Ocurrió un error al intentar justificar.");
+        const modalEl = document.getElementById('modalJustificar');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if(modal) modal.hide();
+    }
+}
+
+// ==========================================
+// 5. UTILIDADES Y MODALES
+// ==========================================
+
+function calcularEdad(fechaString) {
+    if (!fechaString) return "-";
+    const hoy = new Date();
+    const nacimiento = new Date(fechaString);
+    let edad = hoy.getFullYear() - nacimiento.getFullYear();
+    const mes = hoy.getMonth() - nacimiento.getMonth();
+    if (mes < 0 || (mes === 0 && hoy.getDate() < nacimiento.getDate())) { edad--; }
+    return isNaN(edad) ? "-" : edad + " años";
+}
+
+function renderModalJustificacionHTML() {
+    return `
+    <div class="modal fade" id="modalJustificar" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header bg-primary text-white">
+            <h5 class="modal-title">Justificar Inasistencias</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <h6 class="mb-3 text-center" id="just_nombre">Alumno</h6>
+            <p class="small text-muted text-center">Faltas pendientes de justificación:</p>
+            <div id="just_lista" style="max-height: 300px; overflow-y: auto;"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderModalInscripcionHTML() {
+    return `
+    <div class="modal fade" id="modalInscripcion" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header bg-success text-white">
+            <h5 class="modal-title" id="tituloInscripcion">Inscripción</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="ins_dni_est"><input type="hidden" id="ins_nombre_est">
+            <div id="gridMaterias"></div> 
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" class="btn btn-success" id="btnGuardarIns" onclick="guardarInscripcion()">Guardar Cambios</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderModalHTML() {
+    return `
+    <div class="modal fade" id="modalEstudiante" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header bg-primary text-white">
+            <h5 class="modal-title" id="modalTitle">Estudiante</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <form id="formEstudiante">
+                <input type="hidden" id="accion_form"><input type="hidden" id="dni_original"><input type="hidden" id="email_original">
+                <div class="row">
+                    <div class="col-md-6 mb-2"><label>DNI</label><input type="number" id="inp_dni" class="form-control" required></div>
+                    <div class="col-md-6 mb-2"><label>Nacimiento</label><input type="date" id="inp_nacimiento" class="form-control"></div>
+                </div>
+                <div class="mb-2"><label>Nombre y Apellido</label><input type="text" id="inp_nombre" class="form-control" required></div>
+                <div class="row">
+                    <div class="col-md-6 mb-2"><label>Curso</label><input type="text" id="inp_curso" class="form-control" required></div>
+                    <div class="col-md-6 mb-2"><label>Email</label><input type="email" id="inp_email" class="form-control" required></div>
+                </div>
+                <div class="row">
+                    <div class="col-6 mb-2"><label>Adulto Resp.</label><input type="text" id="inp_adulto" class="form-control"></div>
+                    <div class="col-6 mb-2"><label>Teléfono</label><input type="text" id="inp_tel" class="form-control"></div>
+                </div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" class="btn btn-primary" id="btnGuardarModal" onclick="guardarEstudiante()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderModalDocenteHTML() {
+    return `
+    <div class="modal fade" id="modalDocente" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header bg-success text-white">
+            <h5 class="modal-title" id="modalTitleDoc">Docente</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <form id="formDocente">
+                <input type="hidden" id="accion_doc"><input type="hidden" id="doc_dni_orig"><input type="hidden" id="doc_email_orig">
+                <div class="mb-2"><label>DNI</label><input type="number" id="doc_dni" class="form-control"></div>
+                <div class="mb-2"><label>Nombre</label><input type="text" id="doc_nombre" class="form-control"></div>
+                <div class="mb-2"><label>Email ABC</label><input type="email" id="doc_email" class="form-control"></div>
+                <div class="mb-2"><label>Celular</label><input type="text" id="doc_cel" class="form-control"></div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" class="btn btn-success" id="btnGuardarDoc" onclick="guardarDocente()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderModalAsignacionCompletaHTML() {
+    return `
+    <div class="modal fade" id="modalAsignacionCompleta" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header bg-warning">
+            <h5 class="modal-title text-dark">Asignar Materia</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p>Docente: <b><span id="span_nombre_docente"></span></b></p>
+            <input type="hidden" id="asig_dni_docente">
+            <input type="hidden" id="asig_nombre_docente">
+            
+            <div class="mb-3">
+                <label class="form-label">Tipo de Asignación:</label>
+                <select id="tipo_asignacion" class="form-select">
+                    <option value="Titular">Titular</option>
+                    <option value="Provisional">Provisional</option>
+                    <option value="Interino">Interino</option>
+                    <option value="Suplencia">Suplencia</option>
+                </select>
+                <div class="form-text">
+                    <small>
+                        <strong>Titular/Provisional/Interino:</strong> Reemplaza al docente anterior.<br>
+                        <strong>Suplencia:</strong> Marca en rojo al docente suplantado.
+                    </small>
+                </div>
+            </div>
+            
+            <div id="suplente_info" class="d-none alert alert-warning">
+                <small>⚠️ La materia aparecerá marcada como suplencia en el docente actual y se mantendrá el docente anterior como referencia.</small>
+            </div>
+            
+            <div class="mb-3">
+                <label class="form-label">Seleccionar Materia:</label>
+                <select id="sel_materia_asig" class="form-select" size="8"></select>
+                <small class="text-danger fw-bold">* Las vacantes aparecen en rojo</small><br>
+                <small class="text-warning fw-bold">* Las suplencias aparecen en naranja</small>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" class="btn btn-dark" id="btnGuardarAsigCompleta" onclick="guardarAsignacionCompleta()">Confirmar Asignación</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
